@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="pl">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hex 9×9: zagraj z botem</title>
+<title>Hex 9×9</title>
 <style>
 :root{--bg:#e8ecf0;--ink:#18222d;--mute:#5b6b7b;--panel:#fff;--line:#c3ccd5;--cell:#cfd8e0;--cellh:#b9c6d2;--black:#161a1f;--red:#d6383a;--accent:#2f5d8a}
 *{box-sizing:border-box}
@@ -39,6 +39,13 @@ svg{width:100%;height:auto;display:block}
 .edge{fill:none;stroke-width:6;stroke-linecap:round;pointer-events:none}
 .legend{display:flex;gap:18px;flex-wrap:wrap;color:var(--mute);font-size:.9rem;margin-top:8px}
 .dot{display:inline-block;width:.8em;height:.8em;border-radius:50%;margin-right:6px}
+
+/* MODAL (Koniec gry) */
+#overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:999;backdrop-filter:blur(3px)}
+.modal{background:var(--panel);padding:30px 40px;border-radius:12px;text-align:center;box-shadow:0 10px 25px rgba(0,0,0,0.2);max-width:400px;width:90%}
+.modal h2{margin:0 0 10px;font-size:2rem;color:var(--ink)}
+.modal p{color:var(--mute);margin:0 0 24px;font-size:1.1rem}
+.modal .btn-group{display:flex;gap:10px;justify-content:center}
 </style>
 </head>
 <body>
@@ -46,19 +53,29 @@ svg{width:100%;height:auto;display:block}
 <h1>Hex 9×9</h1>
 
 <section id="menu">
-  <p class="sub">Wybierz przeciwnika. Wygrywa ten, kto pierwszy połączy swoje dwa brzegi planszy. Po pierwszym ruchu drugi gracz może zagrać SWAP i przejąć położony kamień.</p>
+  <p class="sub">Choose your opponent. Connect your two opposite borders to win. The second player can use the SWAP rule to steal the first move.</p>
   <div class="agents">
     <button class="agent" id="a-heur" aria-pressed="false" data-agent="heuristic">
-      <b>Agent heurystyczny</b>
-      <span>Liczy najkrótsze ścieżki (0-1 BFS) dla siebie i dla Ciebie i wybiera pole, które najbardziej pomaga jemu, a przeszkadza Tobie.</span>
+      <b>Heuristic Bot</b>
+      <span>Uses 0-1 BFS to find shortest paths. Blocks your connections.</span>
     </button>
-    <button class="agent" id="a-ppo" aria-pressed="false" data-agent="ppo">
-      <b>Agent PPO</b>
-      <span>Głęboka sieć ResNet trenowana metodą Maskable PPO. Działa w Twojej przeglądarce (ONNX).</span>
-      <i id="ppo-state">Wczytywanie modelu…</i>
+    <button class="agent" id="a-ppo_early" aria-pressed="false" data-agent="ppo_early">
+      <b>PPO Bot (Early)</b>
+      <span>Beginner stage of reinforcement learning.</span>
+      <i id="state-ppo_early">Loading model...</i>
+    </button>
+    <button class="agent" id="a-ppo_mid" aria-pressed="false" data-agent="ppo_mid">
+      <b>PPO Bot (Intermediate)</b>
+      <span>Mid-training network.</span>
+      <i id="state-ppo_mid">Loading model...</i>
+    </button>
+    <button class="agent" id="a-ppo_late" aria-pressed="false" data-agent="ppo_late">
+      <b>PPO Bot (Advanced)</b>
+      <span>Fully trained deep ResNet. Plays strong.</span>
+      <i id="state-ppo_late">Loading model...</i>
     </button>
   </div>
-  <button class="go" id="start" disabled>Zagraj</button>
+  <button class="go" id="start" disabled>Play</button>
 </section>
 
 <section id="game" hidden>
@@ -66,23 +83,34 @@ svg{width:100%;height:auto;display:block}
     <p id="status" role="status" aria-live="polite"></p>
     <div class="ctl">
       <button class="swap go" id="swap" hidden>SWAP</button>
-      <button class="sec" id="again">Nowa gra</button>
-      <button class="sec" id="back">Zmień agenta</button>
+      <button class="sec" id="again">New Game</button>
+      <button class="sec" id="back">Change Bot</button>
     </div>
   </div>
   <p id="note"></p>
-  <svg id="board" aria-label="Plansza Hex 9×9"></svg>
+  <svg id="board" aria-label="Hex 9x9 Board"></svg>
   <div class="legend">
-    <span><i class="dot" style="background:var(--black)"></i>Czarny łączy górę z dołem i zaczyna</span>
-    <span><i class="dot" style="background:var(--red)"></i>Czerwony łączy lewą stronę z prawą</span>
+    <span><i class="dot" style="background:var(--black)"></i>Black connects top & bottom (goes first)</span>
+    <span><i class="dot" style="background:var(--red)"></i>Red connects left & right</span>
   </div>
 </section>
 </main>
 
+<div id="overlay" hidden>
+  <div class="modal">
+    <h2 id="modal-title">Game Over</h2>
+    <p id="modal-desc"></p>
+    <div class="btn-group">
+      <button class="go" id="modal-again">Play Again</button>
+      <button class="sec" id="modal-menu">Menu</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
 <script>
 "use strict";
-/* ============ LOGIKA GRY (1:1 z HexState w GUI.py) ============ */
+/* ============ GAME ENGINE ============ */
 const N = 9, T = N * N, SWAP = T;
 const DIRS = [[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0]];
 const nbrs = Array.from({length: T}, (_, i) => {
@@ -100,7 +128,7 @@ class HexState {
   }
   apply(a) {
     if (this.over) return;
-    if (a === SWAP) {                       // drugi gracz przejmuje pierwszy kamień (to samo pole, kolor czerwony)
+    if (a === SWAP) {
       if (this.moves !== 1) return;
       this.board[this.first] = 1; this.cur = 0; this.moves++; return;
     }
@@ -110,7 +138,7 @@ class HexState {
     if (this.win(this.cur)) { this.over = true; this.winner = this.cur; } else this.cur = 1 - this.cur;
     this.moves++;
   }
-  win(p) {                                   // gracz 0: góra→dół, gracz 1: lewa→prawa
+  win(p) {
     const seen = new Set(), st = [];
     for (let i = 0; i < N; i++) { const n = p === 0 ? i : i * N; if (this.board[n] === p) st.push(n); }
     while (st.length) {
@@ -122,11 +150,11 @@ class HexState {
   }
 }
 
-/* ============ AGENT HEURYSTYCZNY (HeuristicAgent2 z GUI.py) ============ */
+/* ============ HEURISTIC AGENT ============ */
 const pick = a => a[(Math.random() * a.length) | 0];
 const FAIR = []; for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) { const d = Math.abs(r - 4) + Math.abs(c - 4); if (d === 2 || d === 3) FAIR.push(r * N + c); }
 
-function dists(s, p, start) {              // 0-1 BFS od krawędzi startowej/końcowej gracza p
+function dists(s, p, start) {
   const d = Array(T).fill(Infinity), q = [];
   for (let i = 0; i < N; i++) {
     const n = p === 0 ? (start ? i : (N - 1) * N + i) : (start ? i * N : i * N + N - 1);
@@ -170,17 +198,23 @@ function heuristicStep(s) {
   return acts.length ? pick(acts) : pick(legal);
 }
 
-/* ============ AGENT PPO (PPOAgent z GUI.py, model w ONNX) ============ */
-let ppoSess = null;
-const mapAct = (a, p, rot) => {              // akcja w układzie sieci -> pole na planszy
+/* ============ PPO AGENTS (ONNX) ============ */
+const ppoAgents = ['ppo_early', 'ppo_mid', 'ppo_late'];
+const ppoSess = { ppo_early: null, ppo_mid: null, ppo_late: null };
+const ppoState = { ppo_early: 'loading', ppo_mid: 'loading', ppo_late: 'loading' };
+
+const mapAct = (a, p, rot) => {
   if (a === SWAP) return a;
   let r = (a / N) | 0, c = a % N;
   if (rot) { r = N - 1 - r; c = N - 1 - c; }
   if (p === 1) [r, c] = [c, r];
   return r * N + c;
 };
-async function ppoStep(s, p, rot) {
-  const x = new Float32Array(3 * T);         // kanały: moje, przeciwnika, puste
+
+// Zmieniono na DETERMINISTIC = TRUE (Argmax)
+async function ppoStep(s, p, rot, agentId) {
+  const sess = ppoSess[agentId];
+  const x = new Float32Array(3 * T);
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
     let rr = rot ? N - 1 - r : r, rc = rot ? N - 1 - c : c;
     if (p === 1) [rr, rc] = [rc, rr];
@@ -188,20 +222,23 @@ async function ppoStep(s, p, rot) {
     x[(v === p ? 0 : v === -1 ? 2 : 1) * T + r * N + c] = 1;
   }
   const L = new Set(s.legal());
-  const res = await ppoSess.run({ [ppoSess.inputNames[0]]: new ort.Tensor('float32', x, [1, 3, N, N]) });
+  const res = await sess.run({ [sess.inputNames[0]]: new ort.Tensor('float32', x, [1, 3, N, N]) });
   const lg = Object.values(res).find(t => t.data.length === T + 1).data;
-  const w = new Float64Array(T + 1); let mx = -Infinity, sum = 0;
-  for (let a = 0; a <= T; a++) if (L.has(mapAct(a, p, rot)) && lg[a] > mx) mx = lg[a];
-  for (let a = 0; a <= T; a++) if (L.has(mapAct(a, p, rot))) { w[a] = Math.exp(lg[a] - mx); sum += w[a]; }
-  let u = Math.random() * sum, ch = -1;      // losowanie z rozkładu polityki (jak deterministic=False w Pythonie)
-  for (let a = 0; a <= T; a++) if (w[a] > 0) { ch = a; u -= w[a]; if (u <= 0) break; }
+  
+  let bestLogit = -Infinity, ch = -1;
+  for (let a = 0; a <= T; a++) {
+    if (L.has(mapAct(a, p, rot)) && lg[a] > bestLogit) {
+      bestLogit = lg[a];
+      ch = a;
+    }
+  }
   return mapAct(ch, p, rot);
 }
 
-/* ============ INTERFEJS ============ */
+/* ============ UI & INTERACTIONS ============ */
 const $ = id => document.getElementById(id);
-const NAME = ['Czarny (góra–dół)', 'Czerwony (lewo–prawo)'];
-let agent = 'ppo', ppoState = 'loading';
+const NAME = ['Black', 'Red'];
+let agent = 'ppo_late';
 let st, human, rot, gameId = 0, busy = false, last = -1;
 
 const R = 25, DX = Math.sqrt(3) * R, DY = 1.5 * R, OX = 18 + DX / 2, OY = 18 + R;
@@ -229,6 +266,16 @@ function buildBoard() {
   }
 }
 
+function handleGameOver() {
+  const humanWon = st.winner === human;
+  $('modal-title').textContent = humanWon ? 'You Win! 🎉' : 'Bot Wins';
+  $('modal-title').style.color = humanWon ? 'var(--accent)' : 'var(--red)';
+  $('modal-desc').textContent = humanWon 
+    ? 'Great job connecting the borders!' 
+    : 'Better luck next time.';
+  $('overlay').hidden = false;
+}
+
 function render(msg) {
   const humanTurn = !st.over && st.cur === human && !busy;
   for (let i = 0; i < T; i++) {
@@ -237,17 +284,22 @@ function render(msg) {
   }
   $('swap').hidden = !(humanTurn && st.moves === 1);
   let t;
-  if (st.over) t = st.winner === human ? 'Wygrałeś! 🎉' : 'Bot wygrywa.';
-  else if (st.cur === human) t = 'Twój ruch. ' + (st.moves === 1 ? 'Możesz też zagrać SWAP.' : '');
-  else t = 'Bot myśli…';
-  $('status').textContent = `Grasz jako ${NAME[human]}. ` + t;
+  if (st.over) {
+    t = st.winner === human ? 'You win! 🎉' : 'Bot wins.';
+    if ($('overlay').hidden) setTimeout(handleGameOver, 400); // Pokazuje Modal
+  }
+  else if (st.cur === human) t = 'Your turn. ' + (st.moves === 1 ? 'You can also use SWAP.' : '');
+  else t = 'Bot is thinking...';
+  
+  $('status').textContent = `You play as ${NAME[human]}. ` + t;
   $('note').textContent = msg || '';
 }
 
 function newGame() {
+  $('overlay').hidden = true;
   gameId++; busy = false; last = -1;
   st = new HexState(); human = Math.random() < .5 ? 0 : 1; rot = Math.random() < .5;
-  render(human === 0 ? 'Wylosowano: zaczynasz Ty.' : 'Wylosowano: zaczyna bot. Po jego pierwszym ruchu możesz zagrać SWAP.');
+  render(human === 0 ? 'Coin flip: you start.' : 'Coin flip: bot starts. You can use SWAP after its first move.');
   if (st.cur !== human) botTurn(gameId);
 }
 
@@ -256,9 +308,10 @@ function click(a) {
   st.apply(a); last = a; render();
   if (!st.over) botTurn(gameId);
 }
+
 $('swap').onclick = () => {
   if (st.over || busy || st.cur !== human || st.moves !== 1) return;
-  st.apply(SWAP); last = st.first; render('Zagrałeś SWAP: pierwszy kamień jest teraz Twój.');
+  st.apply(SWAP); last = st.first; render('You used SWAP. The first piece is now yours.');
   if (!st.over) botTurn(gameId);
 };
 
@@ -268,34 +321,54 @@ async function botTurn(id) {
   if (id !== gameId) return;
   try {
     const bot = 1 - human;
-    const a = agent === 'ppo' ? await ppoStep(st, bot, rot) : heuristicStep(st);
+    const a = agent.startsWith('ppo') ? await ppoStep(st, bot, rot, agent) : heuristicStep(st);
     if (id !== gameId) return;
     st.apply(a); busy = false;
-    if (a === SWAP) { last = st.first; render('Bot zagrał SWAP: Twój pierwszy kamień jest teraz jego.'); }
+    if (a === SWAP) { last = st.first; render('Bot used SWAP. It stole your first piece.'); }
     else { last = a; render(); }
-    if (!st.over && st.cur !== human) botTurn(id);   // po SWAP-ie ruch wraca do gracza 0
-  } catch (e) { busy = false; console.error(e); render('Błąd agenta: ' + e.message); }
+    if (!st.over && st.cur !== human) botTurn(id);
+  } catch (e) { busy = false; console.error(e); render('Bot error: ' + e.message); }
 }
 
-/* menu */
+/* MENU */
 function paintMenu() {
-  if (agent === 'ppo' && ppoState !== 'ready') agent = 'heuristic';
+  if (agent.startsWith('ppo') && ppoState[agent] !== 'ready') {
+    // If selected agent isn't ready yet, fallback visually to heuristic (or keep button selected but disable 'Play')
+  }
+  
   $('a-heur').setAttribute('aria-pressed', agent === 'heuristic');
-  $('a-ppo').setAttribute('aria-pressed', agent === 'ppo');
-  $('a-ppo').disabled = ppoState !== 'ready';
-  $('ppo-state').textContent = { loading: 'Wczytywanie modelu…', ready: 'Model gotowy', error: 'Nie udało się wczytać hex_model.onnx' }[ppoState];
-  $('start').disabled = false;
+  
+  ppoAgents.forEach(id => {
+    $(`a-${id}`).setAttribute('aria-pressed', agent === id);
+    $(`a-${id}`).disabled = ppoState[id] !== 'ready';
+    $(`state-${id}`).textContent = {
+      loading: 'Loading model...',
+      ready: 'Model ready',
+      error: `Failed to load ${id}.onnx`
+    }[ppoState[id]];
+  });
+  
+  $('start').disabled = agent.startsWith('ppo') ? (ppoState[agent] !== 'ready') : false;
 }
-document.querySelectorAll('.agent').forEach(b => b.onclick = () => { if (!b.disabled) { agent = b.dataset.agent; paintMenu(); } });
-$('start').onclick = () => { $('menu').hidden = true; $('game').hidden = false; newGame(); };
-$('again').onclick = newGame;
-$('back').onclick = () => { gameId++; busy = false; $('game').hidden = true; $('menu').hidden = false; paintMenu(); };
+
+document.querySelectorAll('.agent').forEach(b => b.onclick = () => { 
+  if (!b.disabled) { agent = b.dataset.agent; paintMenu(); } 
+});
+
+$('start').onclick = () => {$('menu').hidden = true; $('game').hidden = false; newGame(); };$('again').onclick = newGame;
+$('modal-again').onclick = newGame;
+$('back').onclick = () => {$('overlay').hidden = true; gameId++; busy = false; $('game').hidden = true; $('menu').hidden = false; paintMenu(); };
+$('modal-menu').onclick =$('back').onclick;
 
 buildBoard(); paintMenu();
-ort.env.wasm.numThreads = 1;               // GitHub Pages nie daje nagłówków COOP/COEP
-ort.InferenceSession.create('hex_model.onnx', { executionProviders: ['wasm'] })
-  .then(s => { ppoSess = s; ppoState = 'ready'; agent = 'ppo'; paintMenu(); })
-  .catch(e => { console.error(e); ppoState = 'error'; paintMenu(); });
+ort.env.wasm.numThreads = 1;
+
+// Asynchronous loading of all 3 models
+ppoAgents.forEach(id => {
+  ort.InferenceSession.create(`${id}.onnx`, { executionProviders: ['wasm'] })
+    .then(s => { ppoSess[id] = s; ppoState[id] = 'ready'; paintMenu(); })
+    .catch(e => { console.error(`Error loading ${id}.onnx:`, e); ppoState[id] = 'error'; paintMenu(); });
+});
 </script>
 </body>
 </html>
