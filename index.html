@@ -52,9 +52,9 @@
             document.getElementById("statusText").innerText = "Pobieranie modelu PPO (.onnx)...";
             try {
                 // Upewnij się, że Twój model nazwałeś ppo_model.onnx
-                ppoSession = await ort.InferenceSession.create('./ppo_model.onnx', { executionProviders: ['wasm'] });
+                ppoSession = await ort.InferenceSession.create('./hex_model.onnx', { executionProviders: ['wasm'] });
             } catch (e) {
-                console.warn("Nie udało się wczytać ppo_model.onnx. Działa tylko heurystyka.", e);
+                console.warn("Nie udało się wczytać hex_model.onnx. Działa tylko heurystyka.", e);
             }
             startGame();
         }
